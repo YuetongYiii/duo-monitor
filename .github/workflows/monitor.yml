@@ -1,0 +1,56 @@
+name: iPhone Duo Monitor
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - run: pip install requests
+      - env:
+          NTFY_TOPIC: yt-duo-q7m4x9k2
+          EVENT: ${{ github.event_name }}
+        shell: python
+        run: |
+          import os, sys, time, random, requests
+          PARTS = {"MK1H4LL/A": "Night Sky 512GB", "MK1G4LL/A": "Star White 512GB"}
+          ZIPS = ["06269","06901","02116","01701","02903","10001","11201","10601"]
+          STATES = {"CT","MA","RI","NY"}
+          TOPIC = os.environ["NTFY_TOPIC"]
+          MANUAL = os.environ.get("EVENT") == "workflow_dispatch"
+          BUY = "https://www.apple.com/shop/buy-iphone/iphone-duo"
+          H = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0 Safari/537.36",
+               "Accept": "application/json", "Referer": BUY}
+          def push(t, b, p="urgent"):
+              print(t, b)
+              requests.post(f"https://ntfy.sh/{TOPIC}", data=b.encode(),
+                  headers={"Title": t.encode(), "Priority": p, "Click": BUY}, timeout=15)
+          found, seen, errs = {}, set(), []
+          for z in ZIPS:
+              q = {"pl": "true", "mts.0": "regular", "location": z}
+              for i, p in enumerate(PARTS): q[f"parts.{i}"] = p
+              try:
+                  r = requests.get("https://www.apple.com/shop/fulfillment-messages", params=q, headers=H, timeout=20)
+                  r.raise_for_status()
+                  stores = r.json()["body"]["content"]["pickupMessage"].get("stores", [])
+              except Exception as e:
+                  errs.append(f"{z}: {e}"); print(z, e); continue
+              for s in stores:
+                  st = (s.get("state") or "").upper()
+                  if st not in STATES: continue
+                  seen.add(s.get("storeNumber"))
+                  for p, info in (s.get("partsAvailability") or {}).items():
+                      if p in PARTS and info.get("pickupDisplay") == "available":
+                          found[(s.get("storeNumber"), p)] = f"{PARTS[p]} — Apple {s.get('storeName')}, {st} ({info.get('pickupSearchQuote','Available')})"
+              time.sleep(random.uniform(1, 2.5))
+          print(f"checked {len(seen)} stores, {len(found)} available")
+          if found:
+              push("iPhone Duo 512GB 有货了！", "\n".join(found.values()))
+          elif MANUAL:
+              if len(errs) == len(ZIPS):
+                  push("监控测试：查询失败", "Apple 拒绝了请求\n" + errs[0], "default")
+              else:
+                  push("监控测试：运行正常", f"已检查 {len(seen)} 家店，目前无货", "default")
+          if len(errs) == len(ZIPS): sys.exit(1)
